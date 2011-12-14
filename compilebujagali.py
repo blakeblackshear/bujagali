@@ -1,8 +1,14 @@
 import sys
+import os
 import bujagali
-t = bujagali.Bujagali(sys.argv[1], sys.argv[2])
-f = open(sys.argv[3], 'w')
+
+f = open(sys.argv[2], 'w')
 f.write("define(['bujagali'], function(Bujagali){")
-f.write(t.generate())
+
+files = os.listdir(sys.argv[1])
+for infile in files:
+	t = bujagali.Bujagali(infile, sys.argv[1])
+	f.write(t.generate())
+
 f.write("});")
 f.close()

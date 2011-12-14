@@ -220,7 +220,7 @@ class Bujagali(object):
     compiled = self.compile()
     return """
       Bujagali.fxns['%(name)s'] = %(function)s;
-      """ % { 'name': self.template, 'function': compiled}
+      """ % { 'name': os.path.splitext(self.template)[0], 'function': compiled}
 
   def get_html(self, context, port):
     """
