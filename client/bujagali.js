@@ -7,9 +7,21 @@
  * The namespace that holds all the Bujagali magic. You may want to alias it
  * to something shorter and easier to type.
  **/
-var Bujagali = (function() {
-
-  var root = this;
+(function(root, factory) {
+  // Set up Backbone appropriately for the environment.
+  if (typeof exports !== 'undefined') {
+    // Node/CommonJS, no need for jQuery in that case.
+    factory(root, exports, require('underscore'));
+  } else if (typeof define === 'function' && define.amd) {
+    // AMD
+    define(['underscore', 'exports'], function(_, exports) {
+      factory(root, exports, _);
+    });
+  } else {
+    // Browser globals
+    root.Bujagali = factory(root, {}, root._);
+  }
+}(this, function(root, Bujagali, _) {
 
   /* ECMAScript 5!! */
   if (!Object.create) {
@@ -261,44 +273,15 @@ var Bujagali = (function() {
    * - root (String): The path to the root of the templates directory. If you
    *   are running in a browser, this is usually unnecessary.
    **/
-  function Monad(name, context, root) {
+  function Monad(name, data) {
     this.name = name;
     this.markup = [];
-    this.root = root || '';
-    this.afterRenderCalls = {};
-
-    if (context) {
-      this.context = context;
-      this.version = (context.deps && context.deps[this.name]) || this.version;
-    }
+    this.data = data;
   }
 
   var module = {
     fxns: {}, // The actual template functions.
     helpers: helpers, // macros
-    fxnLoaded: function(name) {
-      var pending = pendingExec[name];
-      if (pending) {
-        pending.exec();
-        pendingExec[name] = undefined;
-      }
-    },
-
-    /**
-     * Bujagali.postProcessors -> Object
-     *
-     * This is an object that maps post processing actions to functions. In
-     * a template you can do something like:
-     *
-     *    self.afterRender('myPostProcessor', myData);
-     *
-     * After the render is complete, the function identified by
-     * `Bujagali.postProcessors.myPostProcessor` will be called and passed the
-     * data. If `afterRender` is called multiple times during the course of
-     * the rendering process, the post processing function will receive as
-     * many arguments as times the function was called.
-     **/
-    postProcessors: {},
 
     /**
      * Bujagali.render(name[, args]) -> Bujagali.Monad
@@ -308,26 +291,9 @@ var Bujagali = (function() {
      *   passing the remaining arguments (after the name) to the
      *   `Bujagali.Monad.render` function. It is a shortcut function.
      **/
-    render: function(name) {
-      var inst = new Monad(name);
-      inst.render.apply(inst, _.tail(arguments));
-      return inst;
-    },
-
-    /**
-     * Bujagali.renderMacro(name, cb[, args]) -> undefined
-     * - name (String): The name of the macro to render
-     * - cb (function): A function to call with the results of the macro.
-     *
-     *  This allows you to call Bujagali macros from outside of a template. This
-     *  is useful when you want to update a list that was originally rendered
-     *  with a particular macro from within your JavaScript program.
-     **/
-    renderMacro: function(name, cb) {
-      var shell = new Monad();
-      var markup = shell[name].apply(shell, _.tail(arguments, 2));
-      cb(markup);
-      shell.doAfterRender();
+    render: function(name, data) {
+      var inst = new Monad(name, data);
+      return inst.render.call(inst);
     },
     /**
      * Bujagali.mixin(obj) -> undefined
@@ -348,218 +314,18 @@ var Bujagali = (function() {
     ctor: Monad, // for subtemplates, and we overrode the proto one
 
     /**
-     * Bujagali.Monad#render(context, callback, args) -> undefined
+     * Bujagali.Monad#render(context, args) -> undefined
      * - context (Object): The data provided to the template
-     * - callback (function): The function to be called after render is complete
      *
      * This is the function that does the magic. It loads the template and then
      * executes it with the provided context.
-     *
-     * The context must conform to a particular format:
-     *
-     *    {
-     *        deps: {
-     *          <template path>: <version>,
-     *          ....
-     *        }
-     *        data: {
-     *          // Object representing data used in the template. This is
-     *          // available in the template as "ctx"
-     *        }
-     *    }
-     *
-     * However, this should be taken care of you on the server side. Refer to
-     * that documentation for more details.
-     *
-     * The `callback` is a function with the signature:
-     *
-     *    function callback(data, markup, args);
-     *
-     * where `data` is the `context.data`, `markup` is the result of the template
-     * rendering, and `args` is the same `args` the user passed into
-     * Bujagali.Monad#render.
-     *
-     * `args` is passed back to the callback function and is never used by
-     * `Bujagali.Monad` itself.
      **/
-    render: function(context, callback, args) {
-
-      // save our state for execution
-      this.context = context;
-      this.callback = callback;
-      this.args = args;
-
-      this.version = (context.deps && context.deps[this.name]) || this.version;
-
+    render: function() {
       var template = module.fxns[this.name];
-      if (template) {
-        if (needNewVersion(template.version, this.version)) {
-          log('old template cached, requesting new one');
-          pendingExec[this.name] = this;
-          this.load();
-        }
-        else {
-          this.exec();
-        }
-      }
-      else {
-        pendingExec[this.name] = this;
-        this.load();
-      }
-    },
-
-    renderOnce: function(context, callback, args) {
-      var template = module.fxns[this.name];
-      this.version = (context.deps && context.deps[this.name]) || this.version;
-
-      if (template && (template.version == this.version) && template.rendered) {
-        // we've rendered this already, just call back with the current data
-        callback(context.data, null, args);
-      }
-      else {
-        // we haven't rendered once, do the normal render thing
-        this.render(context, callback, args);
-      }
-    },
-
-    /**
-     * Bujagali.Monad#exec() -> undefined
-     *
-     * Executes the template with the associated data.
-     *
-     * You probably won't need to use this function. Look at
-     * Bujagali.Monad#render instead.
-     **/
-    exec: function() {
-      var template = module.fxns[this.name];
-      /* this.startTime = (new Date()).valueOf(); */
-      template.call(this, this.context.data, this.args);
-    },
-
-    done: function(post) {
-      /* timing that works in IE $('body').append('<div style="color:white;">render for ' + this.name + ' took ' + (((new Date()).valueOf() - this.startTime)) + 'ms </div>'); */
-      this.callback(this.context.data, this.markup.join(''), this.args);
-      if(post) { post(); }
-      this.doAfterRender();
-      module.fxns[this.name].rendered = true;
-    },
-
-    doAfterRender: function() {
-      var self = this;
-      _.each(self.afterRenderCalls, function(args, key) {
-        var f = module.postProcessors[key];
-        if (f) {
-          f.apply(self, args);
-        }
-      });
-    },
-
-    /**
-     * Bujagali.Monad#load() -> undefined
-     *
-     * Loads the template but does not execute it.
-     *
-     * You probably won't need to use this. Look at Bujagali.Monad#render()
-     * instead.
-     **/
-    load: function() {
-      var src;
-      if (this.loading || module.fxns[this.name] && module.fxns[this.name].version == this.version) {
-        return; // already have the right version loaded
-      }
-
-      if (this.version) {
-        src = this.root + '/media/bujagali/' + this.name + '.' + this.version + '.js';
-      }
-      else {
-        throw new Error('No template version found for ' + this.name);
-      }
-
-      this.loading = true;
-
-      if (headEl) {
-        var script;
-        script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.src = src;
-
-        headEl.appendChild(script);
-      }
-      else {
-        // Server side environment
-        if (typeof load != 'undefined') {
-          load(src);
-        }
-        else if (typeof require != 'undefined') {
-          var fs = require('fs');
-          eval(fs.readFileSync(src).toString());
-        }
-      }
-    },
-
-    /**
-     * Bujagali.Monad#afterRender(key, arg) -> undefined
-     * - key (String): The after render action to be called.
-     * - arg (Object): Arbitrary data to pass to the after render funciton.
-     *
-     * Call one of the functions in `Bujagali.postProcessors` after we're done
-     * rendering the Monad. Will be passed `arg`.
-     **/
-    afterRender: function(key, arg) {
-      var argList = this.afterRenderCalls[key];
-      if (argList) {
-        argList.push(arg);
-      }
-      else {
-        this.afterRenderCalls[key] = [arg];
-      }
+      template.call(this, this.data);
+      return this.markup.join('');
     }
   });
 
-  if (root.Backbone) {
-    /* When backbone.js is included, we have a special View that
-     * uses bujagali, but interacts with the rest of the system in
-     * a backbone-like way
-     */
-    module.View = Backbone.View.extend({
-      initialize: function(options) {
-        this.monad = new module.Monad(options.name);
-      },
-      render: function(context) {
-        var self = this;
-        self.monad.render(context, function(data, markup) {
-          $(self.el).html(markup);
-          self.trigger('rendered', data);
-        });
-      }
-    });
-
-    module.MacroView = Backbone.View.extend({
-      initialize: function(name) {
-        this.name = name;
-      },
-      render: function(args) {
-        var self = this;
-        var renderArgs = [self.name, function(markup) {
-          $(self.el).html(markup);
-          self.trigger('rendered');
-        }, self].concat(_.toArray(args));
-        module.renderMacro.apply(self, renderArgs);
-      }
-    });
-  }
-
   return module;
-})();
-
-/* make this load in node.js */
-(function() {
-  if (typeof exports != 'undefined') {
-    var key;
-    for (key in Bujagali) {
-      if (Bujagali.hasOwnProperty(key)) {
-        exports[key] = Bujagali[key];
-      }
-    }
-  }
-})();
+}));

@@ -50,12 +50,8 @@ class FunctionBuilder(object):
     self.appends = []
     self.dependencies = {}
     self.preamble = """
-      function(ctx, args) {
+      function(ctx) {
         var self = this;
-        var done = function(post) {
-          self.done(post);
-          done = function() {};
-        };
         function emit(more) {
           Array.prototype.splice.apply(
             self.markup,
@@ -81,10 +77,9 @@ class FunctionBuilder(object):
         self.dependencies[name] = bg.version
         self.dependencies.update(bg.dependencies)
         self.frontWrap = """
-          var %(monad)s = new self.ctor('%(name)s', self.context, self.root);
-          %(monad)s.load();
+          var %(monad)s = new self.ctor('%(name)s', self.data);
           %(wrap)s
-          %(monad)s.renderOnce(self.context, function() {
+          %(monad)s.renderOnce(self.data)
           """ % { 'name': name, 'wrap': self.frontWrap, 'monad': monad }
         self.backWrap = " }); " + self.backWrap
       elif line.startswith('#extends'):
@@ -175,7 +170,7 @@ class FunctionBuilder(object):
     self.process_appends()
     assert len(self.literals) == 0
     assert len(self.appends) == 0
-    return self.preamble + self.frontWrap + self.f + ' done(); ' + self.backWrap + self.closer
+    return self.preamble + self.frontWrap + self.f + self.backWrap + self.closer
 
 class Bujagali(object):
 
@@ -225,9 +220,7 @@ class Bujagali(object):
     compiled = self.compile()
     return """
       Bujagali.fxns['%(name)s'] = %(function)s;
-      Bujagali.fxns['%(name)s'].version = "%(hash)s";
-      Bujagali.fxnLoaded('%(name)s');
-      """ % { 'name': self.template, 'function': compiled, 'hash': self.version }
+      """ % { 'name': self.template, 'function': compiled}
 
   def get_html(self, context, port):
     """
